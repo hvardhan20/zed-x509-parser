@@ -3,12 +3,16 @@ use std::error::Error;
 
 use lsp_server::{Connection, ErrorCode, Message, Notification, Request, RequestId, Response};
 use lsp_types::{
-    Hover, HoverContents, HoverProviderCapability, MarkupContent, MarkupKind, Position, Range,
-    ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
+    CodeActionOrCommand, CodeActionParams, CodeActionProviderCapability, CodeActionResponse,
+    Command as LspCommand, ExecuteCommandOptions, ExecuteCommandParams, Hover, HoverContents,
+    HoverProviderCapability, MarkupContent, MarkupKind, MessageType, Position, Range,
+    ServerCapabilities, ShowMessageParams, TextDocumentSyncCapability, TextDocumentSyncKind,
 };
 use x509_parser::pem::parse_x509_pem;
 
 mod cert;
+
+const DECODE_COMMAND: &str = "x509.decodeToFile";
 
 fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let (connection, io_threads) = Connection::stdio();
@@ -18,6 +22,11 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         text_document_sync: Some(TextDocumentSyncCapability::Kind(
             TextDocumentSyncKind::FULL,
         )),
+        code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
+        execute_command_provider: Some(ExecuteCommandOptions {
+            commands: vec![DECODE_COMMAND.to_string()],
+            ..Default::default()
+        }),
         ..Default::default()
     };
     connection.initialize(serde_json::to_value(capabilities)?)?;
@@ -36,10 +45,19 @@ fn run(connection: &Connection) -> Result<(), Box<dyn Error + Send + Sync>> {
                 if connection.handle_shutdown(&req)? {
                     return Ok(());
                 }
-                if req.method == "textDocument/hover" {
-                    let response = handle_hover(&req, &documents);
-                    connection.sender.send(Message::Response(response))?;
-                }
+                let response = match req.method.as_str() {
+                    "textDocument/hover" => handle_hover(&req, &documents),
+                    "textDocument/codeAction" => handle_code_action(&req, &documents),
+                    "workspace/executeCommand" => {
+                        handle_execute_command(&req, &documents, connection)
+                    }
+                    _ => Response {
+                        id: req.id.clone(),
+                        result: Some(serde_json::Value::Null),
+                        error: None,
+                    },
+                };
+                connection.sender.send(Message::Response(response))?;
             }
             Message::Notification(not) => handle_notification(not, &mut documents),
             Message::Response(_) => {}
@@ -115,10 +133,7 @@ fn handle_hover(req: &Request, documents: &HashMap<String, String>) -> Response 
 }
 
 fn describe_block(label: &str, pem_text: &str) -> Option<String> {
-    if !matches!(
-        label,
-        "CERTIFICATE" | "X509 CERTIFICATE" | "TRUSTED CERTIFICATE"
-    ) {
+    if !cert::is_certificate_label(label) {
         return None;
     }
 
@@ -129,6 +144,119 @@ fn describe_block(label: &str, pem_text: &str) -> Option<String> {
     };
 
     Some(cert::render_markdown(&cert, &pem.contents))
+}
+
+fn handle_code_action(req: &Request, documents: &HashMap<String, String>) -> Response {
+    let params = match serde_json::from_value::<CodeActionParams>(req.params.clone()) {
+        Ok(p) => p,
+        Err(e) => return error_response(req.id.clone(), &e.to_string()),
+    };
+
+    let uri = params.text_document.uri.to_string();
+    let actions: CodeActionResponse = documents
+        .get(&uri)
+        .and_then(|text| {
+            let offset = position_to_offset(text, params.range.start);
+            let block = cert::find_pem_block_at(text, offset)?;
+            if !cert::is_certificate_label(block.label) {
+                return None;
+            }
+            Some(vec![CodeActionOrCommand::Command(LspCommand {
+                title: "Decode certificate to file".to_string(),
+                command: DECODE_COMMAND.to_string(),
+                arguments: Some(vec![
+                    serde_json::json!(uri),
+                    serde_json::json!(block.start),
+                ]),
+            })])
+        })
+        .unwrap_or_default();
+
+    Response {
+        id: req.id.clone(),
+        result: Some(serde_json::to_value(actions).unwrap()),
+        error: None,
+    }
+}
+
+fn handle_execute_command(
+    req: &Request,
+    documents: &HashMap<String, String>,
+    connection: &Connection,
+) -> Response {
+    let params = match serde_json::from_value::<ExecuteCommandParams>(req.params.clone()) {
+        Ok(p) => p,
+        Err(e) => return error_response(req.id.clone(), &e.to_string()),
+    };
+
+    if params.command != DECODE_COMMAND {
+        return ok_null_response(req.id.clone());
+    }
+
+    match decode_to_file(&params.arguments, documents) {
+        Ok(path) => show_message(connection, MessageType::INFO, &format!("Decoded to {path}")),
+        Err(message) => show_message(connection, MessageType::ERROR, &message),
+    }
+
+    ok_null_response(req.id.clone())
+}
+
+fn decode_to_file(
+    args: &[serde_json::Value],
+    documents: &HashMap<String, String>,
+) -> Result<String, String> {
+    let uri = args
+        .first()
+        .and_then(|v| v.as_str())
+        .ok_or("missing document uri")?;
+    let start = args
+        .get(1)
+        .and_then(|v| v.as_u64())
+        .ok_or("missing block offset")? as usize;
+
+    let text = documents.get(uri).ok_or("document is not open")?;
+    let block = cert::find_pem_block_at(text, start).ok_or("no certificate at cursor")?;
+    if !cert::is_certificate_label(block.label) {
+        return Err("not a certificate block".to_string());
+    }
+
+    let (_, pem) = parse_x509_pem(block.text.as_bytes()).map_err(|e| e.to_string())?;
+    let cert = pem.parse_x509().map_err(|e| e.to_string())?;
+    let markdown = cert::render_full_markdown(&cert, &pem.contents);
+
+    let out_path = decoded_output_path(uri)?;
+    std::fs::write(&out_path, markdown).map_err(|e| e.to_string())?;
+    Ok(out_path)
+}
+
+fn decoded_output_path(uri: &str) -> Result<String, String> {
+    let encoded_path = uri
+        .strip_prefix("file://")
+        .ok_or_else(|| "certificate is not a local file".to_string())?;
+    let path_str = percent_encoding::percent_decode_str(encoded_path)
+        .decode_utf8()
+        .map_err(|e| e.to_string())?;
+    let path = std::path::Path::new(path_str.as_ref());
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("certificate");
+    let mut out = path.to_path_buf();
+    out.set_file_name(format!("{stem}.decoded.md"));
+    out.to_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| "output path is not valid UTF-8".to_string())
+}
+
+fn show_message(connection: &Connection, kind: MessageType, message: &str) {
+    let _ = connection.sender.send(Message::Notification(Notification {
+        method: "window/showMessage".to_string(),
+        params: serde_json::to_value(ShowMessageParams {
+            typ: kind,
+            message: message.to_string(),
+        })
+        .unwrap(),
+    }));
 }
 
 fn position_to_offset(text: &str, position: Position) -> usize {
@@ -156,6 +284,14 @@ fn ok_response(id: RequestId, result: Option<Hover>) -> Response {
     Response {
         id,
         result: Some(serde_json::to_value(result).unwrap()),
+        error: None,
+    }
+}
+
+fn ok_null_response(id: RequestId) -> Response {
+    Response {
+        id,
+        result: Some(serde_json::Value::Null),
         error: None,
     }
 }

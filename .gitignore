@@ -1,3 +1,6 @@
 /target
 /extension/target
 /language-server/target
+/extension/extension.wasm
+/extension/grammars
+*.decoded.md
