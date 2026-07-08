@@ -1,0 +1,4 @@
+name = "PEM"
+grammar = "pem"
+path_suffixes = ["pem", "crt", "cer", "cert"]
+line_comments = []
