@@ -1,6 +1,6 @@
 [package]
 name = "zed_x509_parser"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 publish = false
 license = "MIT"

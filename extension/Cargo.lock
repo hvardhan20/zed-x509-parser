@@ -751,7 +751,7 @@ dependencies = [
 
 [[package]]
 name = "zed_x509_parser"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "zed_extension_api",
 ]

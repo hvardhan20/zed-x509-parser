@@ -1,7 +1,7 @@
 id = "x509-parser"
 name = "X.509 Parser"
 description = "Hover and decode X.509 certificates in PEM files (.pem, .crt, .cer, .cert)"
-version = "0.1.0"
+version = "0.1.1"
 schema_version = 1
 authors = ["Harsha Bachina <hvardhan20@gmail.com>"]
 repository = "https://github.com/hvardhan20/zed-x509-parser"

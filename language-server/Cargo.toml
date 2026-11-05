@@ -1,6 +1,6 @@
 [package]
 name = "x509-language-server"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MIT"
 description = "LSP server that decodes X.509 certificates in PEM files"
