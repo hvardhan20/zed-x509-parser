@@ -3,13 +3,11 @@ use std::error::Error;
 
 use lsp_server::{Connection, ErrorCode, Message, Notification, Request, RequestId, Response};
 use lsp_types::{
-    ApplyWorkspaceEditParams, CodeActionOrCommand, CodeActionParams, CodeActionProviderCapability,
-    CodeActionResponse, Command as LspCommand, CreateFile, CreateFileOptions,
-    DocumentChangeOperation, DocumentChanges, ExecuteCommandOptions, ExecuteCommandParams, Hover,
-    HoverContents, HoverProviderCapability, MarkupContent, MarkupKind, MessageType, OneOf,
-    OptionalVersionedTextDocumentIdentifier, Position, Range, ResourceOp, ServerCapabilities,
-    ShowMessageParams, TextDocumentEdit, TextDocumentSyncCapability, TextDocumentSyncKind,
-    TextEdit, WorkspaceEdit,
+    CodeActionOrCommand, CodeActionParams, CodeActionProviderCapability, CodeActionResponse,
+    Command as LspCommand, ExecuteCommandOptions, ExecuteCommandParams, Hover, HoverContents,
+    HoverProviderCapability, MarkupContent, MarkupKind, MessageType, Position, Range,
+    ServerCapabilities, ShowDocumentParams, ShowMessageParams, TextDocumentSyncCapability,
+    TextDocumentSyncKind,
 };
 use x509_parser::pem::parse_x509_pem;
 
@@ -268,10 +266,9 @@ fn decoded_document_uri(uri: &str) -> Result<String, String> {
     ))
 }
 
-/// Asks the client (via a server-initiated `workspace/applyEdit` request) to
-/// create the decoded file and fill it in, which — unlike writing to disk
-/// directly — makes Zed open it as a tab. Falls back to writing the file
-/// straight to disk if the client rejects or doesn't support the edit.
+/// Writes the decoded file to disk, then asks the client to open it with
+/// `window/showDocument`. (`workspace/applyEdit` was avoided on purpose: Zed
+/// opens an extra "LSP edit" tab for it on top of the file's own tab.)
 fn open_decoded_document(
     connection: &Connection,
     documents: &mut HashMap<String, String>,
@@ -279,66 +276,42 @@ fn open_decoded_document(
     out_uri: &str,
     content: String,
 ) -> Result<(), String> {
+    write_to_disk(out_uri, &content)?;
+
     let uri: lsp_types::Uri = out_uri
         .parse()
         .map_err(|_| "invalid output uri".to_string())?;
-
-    let edit = WorkspaceEdit {
-        document_changes: Some(DocumentChanges::Operations(vec![
-            DocumentChangeOperation::Op(ResourceOp::Create(CreateFile {
-                uri: uri.clone(),
-                options: Some(CreateFileOptions {
-                    overwrite: Some(true),
-                    ignore_if_exists: Some(false),
-                }),
-                annotation_id: None,
-            })),
-            DocumentChangeOperation::Edit(TextDocumentEdit {
-                text_document: OptionalVersionedTextDocumentIdentifier { uri, version: None },
-                edits: vec![OneOf::Left(TextEdit {
-                    range: Range {
-                        start: Position::new(0, 0),
-                        end: Position::new(u32::MAX, 0),
-                    },
-                    new_text: content.clone(),
-                })],
-            }),
-        ])),
-        ..Default::default()
-    };
-
-    let id = RequestId::from(*next_request_id);
-    *next_request_id += 1;
-
-    let params = serde_json::to_value(ApplyWorkspaceEditParams {
-        label: Some("Decode certificate".to_string()),
-        edit,
+    let params = serde_json::to_value(ShowDocumentParams {
+        uri,
+        external: Some(false),
+        take_focus: Some(true),
+        selection: Some(Range::default()),
     })
     .map_err(|e| e.to_string())?;
 
+    let id = RequestId::from(*next_request_id);
+    *next_request_id += 1;
     connection
         .sender
         .send(Message::Request(Request {
             id: id.clone(),
-            method: "workspace/applyEdit".to_string(),
+            method: "window/showDocument".to_string(),
             params,
         }))
         .map_err(|e| e.to_string())?;
 
-    match await_response(connection, documents, &id) {
-        Ok(result) => {
-            let applied = result
-                .get("applied")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            if applied {
-                Ok(())
-            } else {
-                write_to_disk(out_uri, &content)
-            }
-        }
-        Err(_) => write_to_disk(out_uri, &content),
+    let opened = await_response(connection, documents, &id)
+        .ok()
+        .and_then(|result| result.get("success").and_then(|v| v.as_bool()))
+        .unwrap_or(false);
+    if !opened {
+        show_message(
+            connection,
+            MessageType::INFO,
+            &format!("Decoded certificate written to {out_uri}"),
+        );
     }
+    Ok(())
 }
 
 fn write_to_disk(out_uri: &str, content: &str) -> Result<(), String> {
