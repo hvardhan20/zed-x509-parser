@@ -115,7 +115,13 @@ fn format_extended_key_usage(eku: &ExtendedKeyUsage) -> String {
 fn wrap_hex(bytes: &[u8], per_line: usize, indent: &str, upper: bool) -> String {
     let tokens: Vec<String> = bytes
         .iter()
-        .map(|b| if upper { format!("{b:02X}") } else { format!("{b:02x}") })
+        .map(|b| {
+            if upper {
+                format!("{b:02X}")
+            } else {
+                format!("{b:02x}")
+            }
+        })
         .collect();
     let lines: Vec<String> = tokens.chunks(per_line).map(|c| c.join(":")).collect();
     format!("{indent}{}", lines.join(&format!(":\n{indent}")))
@@ -175,10 +181,7 @@ pub fn render_markdown(cert: &X509Certificate, der: &[u8]) -> String {
             oid_short_name(&cert.signature_algorithm.algorithm, &registry)
         ),
         format!("| CA | {} |", if is_ca { "yes" } else { "no" }),
-        format!(
-            "| SHA-256 fingerprint | `{}` |",
-            fingerprint_sha256(der)
-        ),
+        format!("| SHA-256 fingerprint | `{}` |", fingerprint_sha256(der)),
     ];
 
     for ext in cert.extensions() {
@@ -331,7 +334,12 @@ pub fn render_openssl_style(cert: &X509Certificate, pem_text: &str) -> String {
         oid_short_name(&cert.signature_algorithm.algorithm, &registry)
     ));
     out.push_str("    Signature Value:\n");
-    out.push_str(&wrap_hex(cert.signature_value.as_ref(), 18, "        ", false));
+    out.push_str(&wrap_hex(
+        cert.signature_value.as_ref(),
+        18,
+        "        ",
+        false,
+    ));
     out.push('\n');
 
     out.push_str(pem_text);
@@ -344,4 +352,89 @@ pub fn render_openssl_style(cert: &X509Certificate, pem_text: &str) -> String {
 /// X.509 timestamps are always UTC, so match openssl's "... GMT" rendering.
 fn format_openssl_time(display: &str) -> String {
     display.replacen("+00:00", "GMT", 1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use x509_parser::pem::parse_x509_pem;
+
+    const PEM: &str = include_str!("../tests/fixtures/example.pem");
+    const GOLDEN: &str = include_str!("../tests/fixtures/example.decoded.txt");
+
+    fn pem_block() -> &'static str {
+        find_pem_block_at(PEM, 10).expect("block").text
+    }
+
+    #[test]
+    fn finds_block_containing_offset() {
+        let block = find_pem_block_at(PEM, 10).expect("block");
+        assert_eq!(block.label, "CERTIFICATE");
+        assert!(block.text.starts_with("-----BEGIN CERTIFICATE-----"));
+        assert!(block.text.ends_with("-----END CERTIFICATE-----"));
+        assert_eq!(&PEM[block.start..block.end], block.text);
+    }
+
+    #[test]
+    fn no_block_outside_pem() {
+        let text = format!("hello\n{}\ntrailer", pem_block());
+        assert!(find_pem_block_at(&text, 2).is_none());
+        assert!(find_pem_block_at(&text, text.len() - 2).is_none());
+    }
+
+    #[test]
+    fn picks_the_right_block_among_several() {
+        let text = format!(
+            "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n{}",
+            pem_block()
+        );
+        let at_second = text.len() - 5;
+        assert_eq!(
+            find_pem_block_at(&text, at_second).unwrap().label,
+            "CERTIFICATE"
+        );
+        assert_eq!(find_pem_block_at(&text, 5).unwrap().label, "PRIVATE KEY");
+    }
+
+    #[test]
+    fn unterminated_block_is_ignored() {
+        assert!(find_pem_block_at("-----BEGIN CERTIFICATE-----\nAAAA", 5).is_none());
+    }
+
+    #[test]
+    fn certificate_labels() {
+        assert!(is_certificate_label("CERTIFICATE"));
+        assert!(is_certificate_label("X509 CERTIFICATE"));
+        assert!(!is_certificate_label("PRIVATE KEY"));
+    }
+
+    #[test]
+    fn openssl_style_matches_golden_file() {
+        let (_, pem) = parse_x509_pem(pem_block().as_bytes()).unwrap();
+        let cert = pem.parse_x509().unwrap();
+        assert_eq!(render_openssl_style(&cert, pem_block()), GOLDEN);
+    }
+
+    #[test]
+    fn hover_markdown_has_key_fields() {
+        let (_, pem) = parse_x509_pem(pem_block().as_bytes()).unwrap();
+        let cert = pem.parse_x509().unwrap();
+        let md = render_markdown(&cert, &pem.contents);
+        assert!(md.contains("CN=example.com"));
+        assert!(md.contains("sha256WithRSAEncryption"));
+        assert!(md.contains("SHA-256 fingerprint"));
+    }
+
+    #[test]
+    fn helpers_format_as_openssl_does() {
+        assert_eq!(format_ip(&[10, 0, 0, 1]), "10.0.0.1");
+        assert_eq!(
+            wrap_hex(&[0xab, 0x01, 0xff], 2, "  ", true),
+            "  AB:01:\n  FF"
+        );
+        assert_eq!(
+            format_openssl_time("Jul  8 19:54:13 2026 +00:00"),
+            "Jul  8 19:54:13 2026 GMT"
+        );
+    }
 }

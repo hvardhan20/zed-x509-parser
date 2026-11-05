@@ -3,4 +3,7 @@
 /language-server/target
 /extension/extension.wasm
 /extension/grammars
+# Output of the "decode certificate" code action, except the test fixture.
 *.decoded.md
+*.decoded.txt
+!/language-server/tests/fixtures/*.decoded.txt

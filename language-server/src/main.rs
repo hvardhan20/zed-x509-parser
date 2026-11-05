@@ -6,10 +6,10 @@ use lsp_types::{
     ApplyWorkspaceEditParams, CodeActionOrCommand, CodeActionParams, CodeActionProviderCapability,
     CodeActionResponse, Command as LspCommand, CreateFile, CreateFileOptions,
     DocumentChangeOperation, DocumentChanges, ExecuteCommandOptions, ExecuteCommandParams, Hover,
-    HoverContents, HoverProviderCapability, MarkupContent, MarkupKind, MessageType,
-    OneOf, OptionalVersionedTextDocumentIdentifier, Position, Range, ResourceOp,
-    ServerCapabilities, ShowMessageParams, TextDocumentEdit, TextDocumentSyncCapability,
-    TextDocumentSyncKind, TextEdit, WorkspaceEdit,
+    HoverContents, HoverProviderCapability, MarkupContent, MarkupKind, MessageType, OneOf,
+    OptionalVersionedTextDocumentIdentifier, Position, Range, ResourceOp, ServerCapabilities,
+    ShowMessageParams, TextDocumentEdit, TextDocumentSyncCapability, TextDocumentSyncKind,
+    TextEdit, WorkspaceEdit,
 };
 use x509_parser::pem::parse_x509_pem;
 
@@ -29,9 +29,7 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     let capabilities = ServerCapabilities {
         hover_provider: Some(HoverProviderCapability::Simple(true)),
-        text_document_sync: Some(TextDocumentSyncCapability::Kind(
-            TextDocumentSyncKind::FULL,
-        )),
+        text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
         code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
         execute_command_provider: Some(ExecuteCommandOptions {
             commands: vec![DECODE_COMMAND.to_string()],
@@ -178,10 +176,7 @@ fn handle_code_action(req: &Request, documents: &HashMap<String, String>) -> Res
             Some(vec![CodeActionOrCommand::Command(LspCommand {
                 title: "Decode certificate to file".to_string(),
                 command: DECODE_COMMAND.to_string(),
-                arguments: Some(vec![
-                    serde_json::json!(uri),
-                    serde_json::json!(block.start),
-                ]),
+                arguments: Some(vec![serde_json::json!(uri), serde_json::json!(block.start)]),
             })])
         })
         .unwrap_or_default();
@@ -210,8 +205,7 @@ fn handle_execute_command(
 
     match build_decoded_document(&params.arguments, documents) {
         Ok((out_uri, content)) => {
-            match open_decoded_document(connection, documents, next_request_id, &out_uri, content)
-            {
+            match open_decoded_document(connection, documents, next_request_id, &out_uri, content) {
                 Ok(()) => {}
                 Err(message) => show_message(connection, MessageType::ERROR, &message),
             }
@@ -285,7 +279,9 @@ fn open_decoded_document(
     out_uri: &str,
     content: String,
 ) -> Result<(), String> {
-    let uri: lsp_types::Uri = out_uri.parse().map_err(|_| "invalid output uri".to_string())?;
+    let uri: lsp_types::Uri = out_uri
+        .parse()
+        .map_err(|_| "invalid output uri".to_string())?;
 
     let edit = WorkspaceEdit {
         document_changes: Some(DocumentChanges::Operations(vec![
