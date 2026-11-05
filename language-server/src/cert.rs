@@ -362,6 +362,10 @@ mod tests {
     const PEM: &str = include_str!("../tests/fixtures/example.pem");
     const GOLDEN: &str = include_str!("../tests/fixtures/example.decoded.txt");
 
+    fn normalize_line_endings(text: &str) -> String {
+        text.replace("\r\n", "\n")
+    }
+
     fn pem_block() -> &'static str {
         find_pem_block_at(PEM, 10).expect("block").text
     }
@@ -410,9 +414,13 @@ mod tests {
 
     #[test]
     fn openssl_style_matches_golden_file() {
-        let (_, pem) = parse_x509_pem(pem_block().as_bytes()).unwrap();
+        let pem_text = normalize_line_endings(pem_block());
+        let (_, pem) = parse_x509_pem(pem_text.as_bytes()).unwrap();
         let cert = pem.parse_x509().unwrap();
-        assert_eq!(render_openssl_style(&cert, pem_block()), GOLDEN);
+        assert_eq!(
+            render_openssl_style(&cert, &pem_text),
+            normalize_line_endings(GOLDEN)
+        );
     }
 
     #[test]
