@@ -750,7 +750,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "zed_x509_parser"
+name = "zed_pem_parser"
 version = "0.1.1"
 dependencies = [
  "zed_extension_api",

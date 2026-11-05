@@ -1,4 +1,4 @@
-# X.509 Parser for Zed
+# PEM Parser for Zed
 
 Hover over a PEM-encoded X.509 certificate in [Zed](https://zed.dev) to see
 who it was issued to, when it expires, its SANs and its fingerprint. A code
@@ -20,7 +20,7 @@ starts with `-----BEGIN `.
 
 ## Install
 
-Install **X.509 Parser** from the Zed extensions panel (`zed: extensions`).
+Install **PEM Parser** from the Zed extensions panel (`zed: extensions`).
 
 The extension downloads the matching `x509-language-server` binary from this
 repo's GitHub releases on first use. To use your own build instead, put

@@ -1,5 +1,5 @@
-id = "x509-parser"
-name = "X.509 Parser"
+id = "pem-parser"
+name = "PEM Parser"
 description = "Hover and decode X.509 certificates in PEM files (.pem, .crt, .cer, .cert)"
 version = "0.1.1"
 schema_version = 1

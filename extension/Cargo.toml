@@ -1,5 +1,5 @@
 [package]
-name = "zed_x509_parser"
+name = "zed_pem_parser"
 version = "0.1.1"
 edition = "2021"
 publish = false
